@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /test/
+Disallow: /test.html
+
+Sitemap: https://24alkomoscow.site/sitemap.xml
