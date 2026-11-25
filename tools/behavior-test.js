@@ -2,6 +2,7 @@
  *
  * Запуск (jsdom ставится отдельно, в репозиторий не попадает):
  *   python3 -m http.server 8000 --bind 127.0.0.1   # в корне репозитория
+ *   ВАЖНО: не tools/preview-server.py — он перенаправляет «/» на «/test/», и тесты главной упадут.
  *   mkdir -p /tmp/sitetest && cd /tmp/sitetest && npm init -y && npm i jsdom@24
  *   cp <repo>/tools/behavior-test.js . && node behavior-test.js
  *

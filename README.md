@@ -113,7 +113,8 @@ python3 tools/check.py                 # ссылки, canonical, robots, sitema
 - `python3 tools/check.py` — 114 HTML-страниц, 0 проблем: все внутренние ссылки и картинки
   существуют, canonical совпадает с путём, тестовые страницы `noindex` без canonical,
   в `sitemap.xml` только 56 рабочих URL, старого домена `alcohub-msk.com` нет нигде.
-- `tools/behavior-test.js` (jsdom, 47 проверок): десктоп → белый экран; телефон напрямую →
+- `tools/behavior-test.js` (jsdom, 47 проверок; нужен обычный `python3 -m http.server`, а не
+  `preview-server.py`, потому что тот перенаправляет «/» на «/test/»): десктоп → белый экран; телефон напрямую →
   блок; телефон из Google/Яндекса → доступ и запись входа; внутренние переходы после входа;
   Googlebot/YandexBot → доступ; `/test/` и весь тестовый каталог с десктопа; 30 карточек,
   фильтры, поиск «jameson» → 1 карточка; корзина пишет в `localStorage`, счётчик и диалог,
