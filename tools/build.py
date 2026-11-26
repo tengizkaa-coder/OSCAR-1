@@ -274,6 +274,7 @@ def page(path: str, *, title: str, description: str, body: str, robots: str = "i
         + "</script>"
         for item in schema
     )
+    analytics_html = "" if test else analytics()
     scripts_html = f'<script src="{prefix}assets/js/products.js" defer></script>'
     if "app" in scripts:
         scripts_html += f'<script src="{prefix}assets/js/app.js" defer></script>'
@@ -282,11 +283,38 @@ def page(path: str, *, title: str, description: str, body: str, robots: str = "i
 
     site_id = "alkonoch-test" if test else "alkonoch"
     document = f'''<!doctype html>
-<html lang="ru" data-theme="1" data-site="{site_id}" data-image-base="{prefix}" data-base="{prefix}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="robots" content="{robots}"><title>{E(title)}</title><meta name="description" content="{E(description)}">{canonical}<meta name="theme-color" content="#151717"><meta property="og:type" content="{og_type}"><meta property="og:site_name" content="{E(CFG.BRAND)}"><meta property="og:locale" content="ru_RU"><meta property="og:title" content="{E(title)}"><meta property="og:description" content="{E(description)}"><meta property="og:url" content="{E(absolute(path))}"><meta property="og:image" content="{E(og_image_url)}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><link rel="icon" href="{prefix}favicon.ico" sizes="any"><link rel="icon" href="{prefix}logo.svg" type="image/svg+xml"><link rel="icon" type="image/png" sizes="192x192" href="{prefix}assets/icons/icon-192.png"><link rel="apple-touch-icon" sizes="180x180" href="{prefix}assets/icons/apple-touch-icon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="{prefix}assets/css/gate.css"><script src="{prefix}assets/js/gate.js"></script><link rel="stylesheet" href="{prefix}assets/css/styles.css"><link rel="stylesheet" href="{prefix}assets/css/expanded.css?v=4">{json_ld}{scripts_html}</head>
+<html lang="ru" data-theme="1" data-site="{site_id}" data-image-base="{prefix}" data-base="{prefix}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="robots" content="{robots}"><title>{E(title)}</title><meta name="description" content="{E(description)}">{canonical}<meta name="theme-color" content="#151717"><meta property="og:type" content="{og_type}"><meta property="og:site_name" content="{E(CFG.BRAND)}"><meta property="og:locale" content="ru_RU"><meta property="og:title" content="{E(title)}"><meta property="og:description" content="{E(description)}"><meta property="og:url" content="{E(absolute(path))}"><meta property="og:image" content="{E(og_image_url)}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><link rel="icon" href="{prefix}favicon.ico" sizes="any"><link rel="icon" href="{prefix}logo.svg" type="image/svg+xml"><link rel="icon" type="image/png" sizes="192x192" href="{prefix}assets/icons/icon-192.png"><link rel="apple-touch-icon" sizes="180x180" href="{prefix}assets/icons/apple-touch-icon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="{prefix}assets/css/gate.css"><script src="{prefix}assets/js/gate.js"></script><link rel="stylesheet" href="{prefix}assets/css/styles.css"><link rel="stylesheet" href="{prefix}assets/css/expanded.css?v=4">{json_ld}{analytics_html}{scripts_html}</head>
 <body>{body}
 </body></html>'''
     (out_dir / "index.html").write_text(document, encoding="utf-8")
     return path
+
+
+# --------------------------------------------------------------------------- analytics
+def analytics() -> str:
+    """Счётчики Метрики/GA4. Не ставятся тестовым страницам и заблокированным посетителям."""
+    blocks = []
+    if CFG.YANDEX_METRIKA_ID:
+        counter = int(str(CFG.YANDEX_METRIKA_ID).strip()) if str(CFG.YANDEX_METRIKA_ID).strip().isdigit() else CFG.YANDEX_METRIKA_ID
+        blocks.append(
+            "<script>(function(){if(document.documentElement.hasAttribute('data-blocked'))return;"
+            "(function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};"
+            "m[i].l=1*new Date();k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,"
+            "a.parentNode.insertBefore(k,a)})(window,document,'script','https://mc.yandex.ru/metrika/tag.js','ym');"
+            f"ym({counter},'init',{{clickmap:true,trackLinks:true,accurateTrackBounce:true}});}})();</script>"
+            f'<noscript><div><img src="https://mc.yandex.ru/watch/{E(str(counter))}" '
+            'style="position:absolute;left:-9999px" alt=""></div></noscript>'
+        )
+    if CFG.GA4_ID:
+        gid = E(str(CFG.GA4_ID).strip())
+        blocks.append(
+            "<script>(function(){if(document.documentElement.hasAttribute('data-blocked'))return;"
+            "var s=document.createElement('script');s.async=true;"
+            f"s.src='https://www.googletagmanager.com/gtag/js?id={gid}';document.head.appendChild(s);"
+            "window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}window.gtag=gtag;"
+            f"gtag('js',new Date());gtag('config','{gid}');}})();</script>"
+        )
+    return "".join(blocks)
 
 
 # --------------------------------------------------------------------------- pages
