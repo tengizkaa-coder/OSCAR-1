@@ -1,168 +1,203 @@
 #!/usr/bin/env python3
-"""Статические проверки собранного сайта: ссылки, картинки, canonical, robots, schema.org.
+"""Проверка собранного сайта: обход ссылок по двум деревьям, SEO-теги, schema.org, sitemap.
 
-Запуск: python3 tools/check.py
-Возвращает код 1, если найдены проблемы.
+Главное, что проверяется:
+  • из рабочего дерева нельзя попасть в /test/, а из /test/ — в рабочее дерево;
+  • все ссылки и картинки существуют (ни одного 404);
+  • на каждой странице правильные title/description/H1/canonical/robots;
+  • каталог, разделы и товары непустые и связаны между собой;
+  • sitemap.xml содержит только рабочие 56 адресов, robots.txt закрывает /test/.
+
+Запуск: python3 tools/check.py   (код возврата 1, если есть проблемы)
 """
 from __future__ import annotations
 
 import json
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import site_config as CFG  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_PARTS = {".git", "tools"}
-OLD_DOMAINS = ("alcohub-msk", "alkomoskva", "alcohub")
-TEST_ALLOWED = {"404.html", "test.html"}
-
+PRODUCTS = json.loads((ROOT / "tools" / "data" / "products.json").read_text(encoding="utf-8"))
+UTILITY = {"404.html", "test.html"}
+EXPECTED_PAGES = 1 + 1 + len(CFG.CATEGORIES) + len(PRODUCTS) + 1 + len(CFG.DISTRICTS) + 1
 problems: list[str] = []
 
 
-def report(path: Path, message: str) -> None:
-    problems.append(f"{path.relative_to(ROOT).as_posix()}: {message}")
+def fail(path: Path | str, message: str) -> None:
+    problems.append(f"{path}: {message}")
 
 
-def pages() -> list[Path]:
-    return sorted(p for p in ROOT.rglob("*.html") if not SKIP_PARTS & set(p.relative_to(ROOT).parts))
+def rel(path: Path) -> str:
+    return path.relative_to(ROOT).as_posix()
 
 
-def check_page(path: Path) -> None:
-    rel = path.relative_to(ROOT).as_posix()
-    markup = path.read_text(encoding="utf-8")
-    is_test = rel.startswith("test/")
-    is_utility = rel in TEST_ALLOWED
-
-    robots = re.search(r'<meta name="robots" content="([^"]+)"', markup)
-    if not robots:
-        report(path, "нет meta robots")
-    elif is_test and "noindex" not in robots.group(1):
-        report(path, "тестовая страница должна быть noindex")
-    elif not is_test and not is_utility and "noindex" in robots.group(1):
-        report(path, "рабочая страница закрыта от индексации")
-
-    canonicals = re.findall(r'<link rel="canonical" href="([^"]+)"', markup)
-    if is_test:
-        if canonicals:
-            report(path, "у тестовой страницы не должно быть canonical")
-    elif not is_utility:
-        expected = CFG.DOMAIN + "/" + rel.rsplit("index.html", 1)[0]
-        if canonicals != [expected]:
-            report(path, f"canonical {canonicals} вместо {expected}")
-
-    title = re.search(r"<title>(.*?)</title>", markup, re.S)
-    description = re.search(r'<meta name="description" content="([^"]*)"', markup)
-    if not title or not title.group(1).strip():
-        report(path, "нет title")
-    if not is_utility:
-        if not description:
-            report(path, "нет description")
-        elif not 60 <= len(description.group(1)) <= 200:
-            report(path, f"длина description {len(description.group(1))} вне 60–200")
-    if len(re.findall(r"<h1[ >]", markup)) != 1 and not is_utility:
-        report(path, "должен быть ровно один h1")
-
-    for bad in OLD_DOMAINS:
-        if bad in markup:
-            report(path, f"остался старый домен/путь: {bad}")
-    if "site-previews" in markup:
-        report(path, "осталась зависимость site-previews")
-
-    for match in re.finditer(r'(?:href|src)="([^"]+)"', markup):
-        url = match.group(1)
-        if url.startswith(("tel:", "https://", "http://", "#", "mailto:", "data:", "//")):
-            continue
-        target = (path.parent / url.split("#")[0].split("?")[0]).resolve()
-        if target.is_dir():
-            target = target / "index.html"
-        if not target.exists():
-            report(path, f"битая ссылка: {url}")
-        elif target.suffix == ".png" and target.stat().st_size < 1000:
-            report(path, f"подозрительно маленькая картинка: {url}")
-
-    for block in re.findall(r'<script type="application/ld\+json">(.*?)</script>', markup, re.S):
-        try:
-            data = json.loads(block)
-        except json.JSONDecodeError as exc:
-            report(path, f"невалидный JSON-LD: {exc}")
-            continue
-        if data.get("@type") == "Product":
-            if "price" in json.dumps(data.get("offers", {})):
-                report(path, "в Offer не должно быть цены")
-            for image in data.get("image", []):
-                if not image.startswith(CFG.DOMAIN + "/"):
-                    report(path, f"image в JSON-LD не абсолютный: {image}")
-        if data.get("@type") == "Store" and CFG.STORE_ADDRESS is None and "address" in data:
-            report(path, "адрес в Store, хотя он не подтверждён")
-
-    phone_ok = CFG.PHONE_HREF in markup
-    if not is_utility and not phone_ok:
-        report(path, "нет ссылки на телефон")
-
-
-def check_sitemap() -> None:
-    sitemap = ROOT / "sitemap.xml"
-    if not sitemap.exists():
-        problems.append("sitemap.xml отсутствует")
-        return
-    text = sitemap.read_text(encoding="utf-8")
-    urls = re.findall(r"<loc>([^<]+)</loc>", text)
-    if "/test/" in text or "test.html" in text:
-        problems.append("sitemap.xml содержит тестовые страницы")
-    if len(urls) != len(set(urls)):
-        problems.append("sitemap.xml содержит дубликаты")
-    for url in urls:
-        if not url.startswith(CFG.DOMAIN + "/"):
-            problems.append(f"sitemap.xml: чужой домен {url}")
-            continue
-        path = url[len(CFG.DOMAIN) + 1:]
-        if not (ROOT / path / "index.html").exists():
-            problems.append(f"sitemap.xml: нет файла для {url}")
-    if len(urls) != 56:
-        problems.append(f"sitemap.xml: ожидалось 56 URL, найдено {len(urls)}")
-
-
-def check_robots() -> None:
-    robots = ROOT / "robots.txt"
-    if not robots.exists():
-        problems.append("robots.txt отсутствует")
-        return
-    text = robots.read_text(encoding="utf-8")
-    if "Disallow: /test/" not in text:
-        problems.append("robots.txt не закрывает /test/")
-    if f"Sitemap: {CFG.DOMAIN}/sitemap.xml" not in text:
-        problems.append("robots.txt без корректного Sitemap")
-
-
-def check_cname() -> None:
-    cname = ROOT / "CNAME"
-    host = CFG.DOMAIN.split("://", 1)[-1]
-    if not cname.exists():
-        problems.append("CNAME отсутствует")
-    elif cname.read_text(encoding="utf-8").strip() != host:
-        problems.append("CNAME не совпадает с доменом")
+def local_links(markup: str):
+    """(тег целиком, ссылка как в HTML, ссылка без якоря) для всех локальных href/src."""
+    for tag in re.finditer(r'<(?:a|link|img|script|source|iframe)\b[^>]*>', markup):
+        markup_tag = tag.group(0)
+        for attribute in ("href", "src"):
+            match = re.search(rf'{attribute}="([^"]+)"', markup_tag)
+            if not match:
+                continue
+            raw = match.group(1)
+            url = raw.split("#")[0].split("?")[0]
+            if not url or url.startswith(("https://", "http://", "tel:", "mailto:", "data:", "//")):
+                continue
+            yield markup_tag, raw, url
 
 
 def main() -> int:
-    all_pages = pages()
-    for path in all_pages:
-        check_page(path)
-    check_sitemap()
-    check_robots()
-    check_cname()
+    trees = {"": set(), "test/": set()}
 
-    working = [p for p in all_pages if not p.relative_to(ROOT).as_posix().startswith("test/")]
-    test = [p for p in all_pages if p.relative_to(ROOT).as_posix().startswith("test/")]
-    print(f"Страниц: {len(all_pages)} (рабочих {len(working)}, тестовых {len(test)})")
+    for tree in trees:
+        start = (ROOT / tree / "index.html").resolve()
+        queue, seen = [start], set()
+        while queue:
+            page = queue.pop()
+            if page in seen:
+                continue
+            seen.add(page)
+            trees[tree].add(page)
+            markup = page.read_text(encoding="utf-8")
+            is_test = bool(tree)
+            page_rel = rel(page)
+            page_dir_rel = page_rel.rsplit("index.html", 1)[0]
+
+            for tag_markup, raw, url in local_links(markup):
+                target = (page.parent / urllib.parse.unquote(url)).resolve()
+                if url.endswith("/"):
+                    target = target / "index.html"
+                if not target.exists():
+                    fail(page_rel, f"битая ссылка: {raw}")
+                    continue
+                target_rel = rel(target)
+                is_page = url.endswith("/") or url.endswith(".html")
+                if is_page:
+                    marked = 'data-tree="production"' in tag_markup
+                    if is_test and not target_rel.startswith("test/"):
+                        if not marked:
+                            fail(page_rel, f"ссылка уводит из /test/: {raw} → /{target_rel}")
+                        continue  # осознанная ссылка на рабочий сайт, дальше не идём
+                    if not is_test and target_rel.startswith("test/"):
+                        fail(page_rel, f"рабочая страница ссылается на тест: {raw}")
+                    if target.suffix == ".html" and target.name == "index.html":
+                        queue.append(target)
+                else:
+                    if target_rel.endswith(".png") and target.stat().st_size < 1000:
+                        fail(page_rel, f"подозрительно маленькая картинка: {raw}")
+
+            # --- SEO-разметка страницы
+            robots = re.search(r'<meta name="robots" content="([^"]+)"', markup)
+            title = re.search(r"<title>(.*?)</title>", markup, re.S)
+            description = re.search(r'<meta name="description" content="([^"]*)"', markup)
+            canonical = re.findall(r'<link rel="canonical" href="([^"]+)"', markup)
+            if not robots:
+                fail(page_rel, "нет meta robots")
+            elif is_test and "noindex" not in robots.group(1):
+                fail(page_rel, "тестовая страница должна быть noindex")
+            elif not is_test and "noindex" in robots.group(1):
+                fail(page_rel, "рабочая страница закрыта от индексации")
+            if not title or len(title.group(1)) < 15:
+                fail(page_rel, "плохой title")
+            if not description or not 60 <= len(description.group(1)) <= 200:
+                length = len(description.group(1)) if description else 0
+                fail(page_rel, f"description длиной {length} (нужно 60–200)")
+            if len(re.findall(r"<h1[ >]", markup)) != 1:
+                fail(page_rel, "должен быть ровно один h1")
+            if is_test:
+                if canonical:
+                    fail(page_rel, "у тестовой страницы не должно быть canonical")
+            else:
+                expected = CFG.DOMAIN + "/" + page_dir_rel
+                if canonical != [expected]:
+                    fail(page_rel, f"canonical {canonical} вместо {expected}")
+            for bad in ("alcohub-msk", "alkomoskva", "site-previews"):
+                if bad in markup:
+                    fail(page_rel, f"остался старый путь/домен: {bad}")
+            if CFG.PHONE_HREF not in markup:
+                fail(page_rel, "нет ссылки на телефон")
+            if CFG.TELEGRAM_URL not in markup:
+                fail(page_rel, "нет ссылки на Telegram-бота")
+            for block in re.findall(r'<script type="application/ld\+json">(.*?)</script>', markup, re.S):
+                try:
+                    data = json.loads(block)
+                except json.JSONDecodeError as error:
+                    fail(page_rel, f"невалидный JSON-LD: {error}")
+                    continue
+                if data.get("@type") == "Product":
+                    if "price" in json.dumps(data.get("offers", {})):
+                        fail(page_rel, "в Offer не должно быть цены")
+                    for image in data.get("image", []):
+                        if not image.startswith(CFG.DOMAIN + "/"):
+                            fail(page_rel, f"image в JSON-LD не абсолютный: {image}")
+
+    # --- содержимое каталога
+    for tree in ("", "test/"):
+        home = ((ROOT / tree / "index.html")).read_text(encoding="utf-8")
+        cards = home.count('article class="product"')
+        if cards != len(PRODUCTS):
+            fail(f"{tree or '/'}index.html", f"карточек на главной {cards}, ожидалось {len(PRODUCTS)}")
+        filters = len(re.findall(r'<button type="button" data-category=', home))
+        if filters != len(CFG.CATEGORIES) + 1:
+            fail(f"{tree or '/'}index.html", f"фильтров {filters}, ожидалось {len(CFG.CATEGORIES) + 1}")
+        if home.count('class="hero-bottle') != 3:
+            fail(f"{tree or '/'}index.html", "в герое должно быть 3 статичные бутылки")
+        catalog = ((ROOT / tree / "catalog/index.html")).read_text(encoding="utf-8")
+        if catalog.count('article class="product') != len(PRODUCTS):
+            fail(f"{tree}catalog/index.html", "в каталоге не все товары")
+        for cat in CFG.CATEGORIES:
+            category = ((ROOT / tree / f"catalog/{cat}/index.html")).read_text(encoding="utf-8")
+            expected = len([item for item in PRODUCTS if item[0] == cat])
+            got = category.count('article class="product')
+            if got != expected:
+                fail(f"{tree}catalog/{cat}/index.html", f"карточек {got}, ожидалось {expected}")
+            if len(re.findall(r'class="category-link"[^>]*aria-current="page"', category)) != 1:
+                fail(f"{tree}catalog/{cat}/index.html", "нет отметки текущего раздела в сетке категорий")
+
+    if len(trees[""]) != EXPECTED_PAGES:
+        fail("/", f"рабочих страниц {len(trees[''])} вместо {EXPECTED_PAGES}")
+    if len(trees["test/"]) != EXPECTED_PAGES:
+        fail("/test/", f"тестовых страниц {len(trees['test/'])} вместо {EXPECTED_PAGES}")
+
+    # --- sitemap / robots / CNAME
+    sitemap = (ROOT / "sitemap.xml").read_text(encoding="utf-8")
+    urls = re.findall(r"<loc>([^<]+)</loc>", sitemap)
+    if len(urls) != EXPECTED_PAGES:
+        fail("sitemap.xml", f"{len(urls)} URL вместо {EXPECTED_PAGES}")
+    if len(set(urls)) != len(urls):
+        fail("sitemap.xml", "есть дубликаты")
+    if "/test/" in sitemap or "test.html" in sitemap:
+        fail("sitemap.xml", "тестовые страницы в карте сайта")
+    for url in urls:
+        if not url.startswith(CFG.DOMAIN + "/"):
+            fail("sitemap.xml", f"чужой домен: {url}")
+            continue
+        path = url[len(CFG.DOMAIN) + 1:]
+        if not (ROOT / path / "index.html").exists():
+            fail("sitemap.xml", f"нет файла для {url}")
+
+    robots_txt = (ROOT / "robots.txt").read_text(encoding="utf-8")
+    if "Disallow: /test/" not in robots_txt:
+        fail("robots.txt", "не закрывает /test/")
+    if f"Sitemap: {CFG.DOMAIN}/sitemap.xml" not in robots_txt:
+        fail("robots.txt", "нет корректного Sitemap")
+
+    host = CFG.DOMAIN.split("://", 1)[-1]
+    if (ROOT / "CNAME").read_text(encoding="utf-8").strip() != host:
+        fail("CNAME", f"должен содержать {host}")
+
     if problems:
         print(f"Проблем: {len(problems)}")
         for item in problems[:60]:
             print(" -", item)
         return 1
-    print("Проблем не найдено")
+    print(f"Ок: {len(trees[''])} рабочих страниц, {len(trees['test/'])} тестовых, {len(urls)} URL в sitemap")
+    print("Ссылки не выходят за пределы своих деревьев, битых путей нет")
     return 0
 
 

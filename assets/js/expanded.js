@@ -77,7 +77,12 @@
       card.hidden = !card.dataset.search.includes(term);
       if (!card.hidden) count++;
     });
-    document.querySelectorAll('.catalog-section').forEach(section => { section.hidden = !section.querySelector('.expanded-product:not([hidden])'); });
+    // Скрываем только разделы с товарами; блоки «Другие разделы» и тексты не трогаем.
+    document.querySelectorAll('.catalog-section').forEach(section => {
+      const cards = section.querySelectorAll('.expanded-product');
+      if (!cards.length) return;
+      section.hidden = ![...cards].some(card => !card.hidden);
+    });
     const emptyMsg = document.querySelector('.search-empty');
     if (emptyMsg) emptyMsg.hidden = count > 0;
   });

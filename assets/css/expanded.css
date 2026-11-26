@@ -7,3 +7,9 @@
 .preview-product-photo img{max-height:100%;max-width:100%;object-fit:contain}
 .preview-product-detail p{margin:16px 0}.preview-product-detail .primary{display:inline-flex}
 @media(max-width:650px){.preview-product-detail{grid-template-columns:1fr}.preview-product-photo{height:270px}}
+
+/* Картинка карточки товара — тоже ссылка (главная и каталог). */
+.product-image>a{display:flex;align-items:flex-end;justify-content:center;width:100%;height:100%}
+/* Счётчик позиций рядом с заголовком раздела. */
+.catalog-section h2 .basket-status{font:400 12px/1.5 var(--body);letter-spacing:0}
+.catalog-section h2 .basket-status a{border-bottom:1px solid var(--rule)}
