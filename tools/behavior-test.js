@@ -65,6 +65,10 @@ const click = (node) => node.dispatchEvent(new node.ownerDocument.defaultView.Mo
   check('главная: две полки с товарами', doc(dom).querySelectorAll('[data-shelf]').length === 2);
   check('главная: карточек товаров не меньше 20', cards(dom).length >= 20, `найдено ${cards(dom).length}`);
   check('главная: три преимущества', doc(dom).querySelectorAll('.feature').length === 3);
+  check('главная: блок про сувениры', doc(dom).querySelectorAll('#souvenirs .souvenir-card').length === 1);
+  check('сувениры: напиток подан как подарок к заказу',
+    (doc(dom).querySelector('.souvenir-copy') || {}).textContent.includes('в подарок'));
+  check('на сайте нет фразы «Цены не публикуем»', !doc(dom).body.textContent.toLowerCase().includes('не публику'));
   check('главная: в герое три бутылки', doc(dom).querySelectorAll('.hero-bottle').length === 3);
   check('на странице нет цены в рублях', !doc(dom).body.textContent.includes('₽'));
   check('у карточек есть «Цену уточняйте»', doc(dom).body.textContent.includes('Цену уточняйте'));

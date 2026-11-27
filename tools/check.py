@@ -127,6 +127,8 @@ def main() -> int:
                 fail(page_rel, "на странице появилась цена — на сайте цен нет")
             if "gate.js" in markup or "data-blocked" in markup:
                 fail(page_rel, "остался скрипт ограничения доступа")
+            if "не публику" in markup.lower():
+                fail(page_rel, "осталась формулировка «цены не публикуем»")
             if "noindex" in markup and not is_test:
                 fail(page_rel, "noindex на рабочей странице")
             for block in re.findall(r'<script type="application/ld\+json">(.*?)</script>', markup, re.S):
@@ -152,6 +154,8 @@ def main() -> int:
             fail(f"{tree or '/'}index.html", "на главной должно быть две полки с товарами")
         if home.count('class="category-link"') != len(CFG.CATEGORIES):
             fail(f"{tree or '/'}index.html", "в полке категорий не все разделы")
+        if home.count('class="souvenir-card"') != 1:
+            fail(f"{tree or '/'}index.html", "нет блока про сувениры")
         if home.count('class="feature"') != 3:
             fail(f"{tree or '/'}index.html", "блок преимуществ должен состоять из трёх карточек")
         if home.count('class="hero-bottle') != 3:
