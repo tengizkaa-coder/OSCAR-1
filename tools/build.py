@@ -43,7 +43,8 @@ CAT_SLUGS = list(CFG.CATEGORIES)
 LABELS = {slug: label for slug, (label, _) in CFG.CATEGORIES.items()}
 # Три бутылки в герое главной: те же, что на обложке для соцсетей.
 HERO_SLUGS = ["jameson", "chianti", "asti"]
-# Вторая полка главной: вино, игристое и пиво.
+# Полки главной: крепкое и лёгкое — весь каталог без повторов.
+STRONG = ["whisky", "vodka", "gin", "cognac", "liqueur", "vermouth"]
 SHELF_LIGHT = ["white-wine", "red-wine", "sparkling", "beer"]
 PRICE_TEXT = "Цену уточняйте"
 PRICE_NOTE = f"по телефону {CFG.PHONE_HUMAN}"
@@ -555,9 +556,9 @@ def home_body(ctx: Ctx) -> str:
             'цены на сайте не публикуются.</p>')
     shelves = (
         '<div class="wrap">'
-        + shelf(ctx, "vitrina", "Витрина",
-                f"{len(PRODUCTS)} позиций в каталоге · наличие и цену уточняйте по телефону",
-                interleave(CAT_SLUGS, 16))
+        + shelf(ctx, "strong", "Крепкий алкоголь",
+                "Виски, водка, джин, коньяк, ликёры и вермут · наличие и цену уточняйте по телефону",
+                [item for category in STRONG for item in items_of(category)])
         + shelf(ctx, "wine-beer", "Вино, игристое и пиво",
                 "Белое и красное вино, игристое, пильзнер и лагер",
                 [item for category in SHELF_LIGHT for item in items_of(category)],
