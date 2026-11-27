@@ -123,6 +123,12 @@ def main() -> int:
                 fail(page_rel, "нет ссылки на телефон")
             if CFG.TELEGRAM_URL not in markup:
                 fail(page_rel, "нет ссылки на Telegram-бота")
+            if "₽" in markup or "руб." in markup:
+                fail(page_rel, "на странице появилась цена — на сайте цен нет")
+            if "gate.js" in markup or "data-blocked" in markup:
+                fail(page_rel, "остался скрипт ограничения доступа")
+            if "noindex" in markup and not is_test:
+                fail(page_rel, "noindex на рабочей странице")
             for block in re.findall(r'<script type="application/ld\+json">(.*?)</script>', markup, re.S):
                 try:
                     data = json.loads(block)
@@ -140,11 +146,14 @@ def main() -> int:
     for tree in ("", "test/"):
         home = ((ROOT / tree / "index.html")).read_text(encoding="utf-8")
         cards = home.count('article class="product"')
-        if cards != len(PRODUCTS):
-            fail(f"{tree or '/'}index.html", f"карточек на главной {cards}, ожидалось {len(PRODUCTS)}")
-        filters = len(re.findall(r'<button type="button" data-category=', home))
-        if filters != len(CFG.CATEGORIES) + 1:
-            fail(f"{tree or '/'}index.html", f"фильтров {filters}, ожидалось {len(CFG.CATEGORIES) + 1}")
+        if cards < 20:
+            fail(f"{tree or '/'}index.html", f"карточек на главной {cards}, мало (нужно от 20)")
+        if len(re.findall(r'data-shelf(?![\w-])', home)) != 2:
+            fail(f"{tree or '/'}index.html", "на главной должно быть две полки с товарами")
+        if home.count('class="category-link"') != len(CFG.CATEGORIES):
+            fail(f"{tree or '/'}index.html", "в полке категорий не все разделы")
+        if home.count('class="feature"') != 3:
+            fail(f"{tree or '/'}index.html", "блок преимуществ должен состоять из трёх карточек")
         if home.count('class="hero-bottle') != 3:
             fail(f"{tree or '/'}index.html", "в герое должно быть 3 статичные бутылки")
         catalog = ((ROOT / tree / "catalog/index.html")).read_text(encoding="utf-8")
@@ -156,8 +165,8 @@ def main() -> int:
             got = category.count('article class="product')
             if got != expected:
                 fail(f"{tree}catalog/{cat}/index.html", f"карточек {got}, ожидалось {expected}")
-            if len(re.findall(r'class="category-link"[^>]*aria-current="page"', category)) != 1:
-                fail(f"{tree}catalog/{cat}/index.html", "нет отметки текущего раздела в сетке категорий")
+            if category.count('class="seo-links"') == 0:
+                fail(f"{tree}catalog/{cat}/index.html", "нет ссылок на другие разделы")
 
     if len(trees[""]) != EXPECTED_PAGES:
         fail("/", f"рабочих страниц {len(trees[''])} вместо {EXPECTED_PAGES}")

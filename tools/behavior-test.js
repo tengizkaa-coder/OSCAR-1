@@ -1,10 +1,14 @@
-/* Поведенческие тесты собранного сайта: доступ, каталог, переходы внутри /test/, корзина.
+/* Поведенческие тесты собранного сайта: витрина, корзина, поиск, /test/.
  *
  * Запуск (jsdom ставится отдельно, в репозиторий не попадает):
  *   python3 -m http.server 8000 --bind 127.0.0.1   # в корне репозитория
  *   ВАЖНО: не tools/preview-server.py — он перенаправляет «/» на «/test/», и тесты главной упадут.
  *   mkdir -p /tmp/sitetest && cd /tmp/sitetest && npm init -y && npm i jsdom@24
  *   cp <repo>/tools/behavior-test.js . && BASE=http://127.0.0.1:8000 node behavior-test.js
+ *
+ * Проверяется то, что видит посетитель: страницы открываются, каталог на месте,
+ * корзина считает и запоминает позиции, но никуда их не отправляет, а тестовое
+ * дерево остаётся закрытым от индексации и не уводит в рабочий сайт.
  */
 const { JSDOM, ResourceLoader, VirtualConsole } = require('jsdom');
 
@@ -27,9 +31,8 @@ function check(name, condition, extra = '') {
   console.log(`${condition ? 'PASS' : 'FAIL'}  ${name}${extra ? '  — ' + extra : ''}`);
 }
 
-async function load(path, { ua = DESKTOP, referrer = '', session = null, local = null } = {}) {
+async function load(path, { ua = DESKTOP, local = null } = {}) {
   const dom = await JSDOM.fromURL(BASE + path, {
-    referrer: referrer || undefined,
     runScripts: 'dangerously',
     resources: new LocalOnly(),
     pretendToBeVisual: true,
@@ -37,7 +40,6 @@ async function load(path, { ua = DESKTOP, referrer = '', session = null, local =
     beforeParse(window) {
       // jsdom 24 игнорирует опцию userAgent, поэтому UA ставим до запуска скриптов страницы.
       Object.defineProperty(window.navigator, 'userAgent', { value: ua, configurable: true });
-      if (session) Object.entries(session).forEach(([key, value]) => window.sessionStorage.setItem(key, String(value)));
       if (local) Object.entries(local).forEach(([key, value]) => window.localStorage.setItem(key, String(value)));
     },
   });
@@ -46,197 +48,161 @@ async function load(path, { ua = DESKTOP, referrer = '', session = null, local =
   return dom;
 }
 
-const blocked = (dom) => dom.window.document.documentElement.getAttribute('data-blocked') === '1';
-const blockedBox = (dom) => dom.window.document.getElementById('blocked');
-const visibleCards = (dom) => [...dom.window.document.querySelectorAll('#products article.product')].filter((card) => !card.hidden);
-const urlOf = (dom, href) => new URL(href, dom.window.location.href).pathname;
+const doc = (dom) => dom.window.document;
+const cards = (dom, scope = 'article.product') => [...doc(dom).querySelectorAll(scope)];
+const counter = (dom) => doc(dom).querySelector('.site-header .basket-count');
+const store = (dom, key = 'selection-alkonoch-v1') => {
+  try { return JSON.parse(dom.window.localStorage.getItem(key) || '{}'); } catch { return {}; }
+};
+const click = (node) => node.dispatchEvent(new node.ownerDocument.defaultView.MouseEvent('click', { bubbles: true, cancelable: true }));
 
 (async () => {
-  // ------------------------------------------------------------ правила доступа
+  // ------------------------------------------------ главная открыта всем
   let dom = await load('/', { ua: DESKTOP });
-  check('десктоп: прямой вход → белый экран', blocked(dom));
-  check('десктоп: белый экран без текста', blockedBox(dom) !== null && blockedBox(dom).textContent.trim() === '');
+  check('десктоп: главная открыта, без заглушки', !doc(dom).documentElement.hasAttribute('data-blocked'));
+  check('десктоп: есть заголовок H1', doc(dom).querySelectorAll('h1').length === 1);
+  check('главная: полка категорий из 10 разделов', doc(dom).querySelectorAll('.category-link').length === 10);
+  check('главная: две полки с товарами', doc(dom).querySelectorAll('[data-shelf]').length === 2);
+  check('главная: карточек товаров не меньше 20', cards(dom).length >= 20, `найдено ${cards(dom).length}`);
+  check('главная: три преимущества', doc(dom).querySelectorAll('.feature').length === 3);
+  check('главная: в герое три бутылки', doc(dom).querySelectorAll('.hero-bottle').length === 3);
+  check('на странице нет цены в рублях', !doc(dom).body.textContent.includes('₽'));
+  check('у карточек есть «Цену уточняйте»', doc(dom).body.textContent.includes('Цену уточняйте'));
   dom.window.close();
 
   dom = await load('/', { ua: MOBILE });
-  check('телефон: прямой вход закрыт', blocked(dom));
-  check('телефон: «Ошибка загрузки страницы.»', (blockedBox(dom)?.textContent || '').includes('Ошибка загрузки'));
+  check('телефон: главная открыта', !doc(dom).documentElement.hasAttribute('data-blocked') && doc(dom).querySelectorAll('.product').length >= 20);
+  check('телефон: есть нижняя панель со звонком', !!doc(dom).querySelector('.mobile-bar a[href^="tel:"]'));
   dom.window.close();
-
-  dom = await load('/', { ua: MOBILE, referrer: 'https://www.google.com/' });
-  check('телефон из Google: доступ открыт', !blocked(dom));
-  check('телефон из Google: вход запомнен', dom.window.sessionStorage.getItem('alkonoch-search-entry') === '1');
-  dom.window.close();
-
-  dom = await load('/', { ua: MOBILE, referrer: 'https://yandex.ru/search/?text=alko' });
-  check('телефон из Яндекса: доступ открыт', !blocked(dom));
-  dom.window.close();
-
-  dom = await load('/catalog/', { ua: MOBILE, referrer: BASE + '/' });
-  check('телефон: внутренний переход без поискового входа закрыт', blocked(dom));
-  dom.window.close();
-
-  dom = await load('/catalog/', { ua: MOBILE, referrer: BASE + '/', session: { 'alkonoch-search-entry': '1' } });
-  check('телефон: внутренний переход после входа открыт', !blocked(dom));
-  dom.window.close();
-
-  dom = await load('/catalog/product/jameson/', { ua: MOBILE, referrer: BASE + '/catalog/whisky/', session: { 'alkonoch-search-entry': '1' } });
-  check('телефон: страница товара открыта', !blocked(dom));
-  dom.window.close();
-
-  for (const [ua, name] of [[GOOGLEBOT, 'Googlebot'], [YANDEXBOT, 'YandexBot']]) {
-    dom = await load('/', { ua });
-    check(`${name}: доступ открыт`, !blocked(dom));
-    dom.window.close();
-  }
-
-  // ------------------------------------------------------------ каталог в статическом HTML
-  const rawHome = await (await fetch(BASE + '/')).text();
-  check('главная: 30 карточек в HTML без JavaScript', (rawHome.match(/article class="product"/g) || []).length === 30);
-  check('главная: 11 фильтров в HTML', (rawHome.match(/<button type="button" data-category=/g) || []).length === 11);
-  check('главная: названия категорий есть в HTML', rawHome.includes('>Виски<') && rawHome.includes('>Пиво<'));
-  check('главная: герой — 3 статичные бутылки', (rawHome.match(/class="hero-bottle/g) || []).length === 3);
 
   dom = await load('/', { ua: GOOGLEBOT });
-  let doc = dom.window.document;
-  check('главная: 30 карточек отрисовано', doc.querySelectorAll('#products article.product').length === 30);
-  const firstHref = urlOf(dom, doc.querySelector('#products a.expanded-product-title').getAttribute('href'));
-  check('главная: карточка ведёт на страницу товара', /^\/catalog\/product\/[a-z0-9-]+\/$/.test(firstHref), firstHref);
-  const cardText = doc.querySelector('#products .product-info').textContent;
-  check('главная: «В наличии» и цена по телефону', cardText.includes('В наличии') && cardText.includes('цену уточняйте по телефону'));
-  check('главная: у карточки есть ссылка на звонок', !!doc.querySelector('#products .product-info a[href^="tel:"]'));
-
-  const searchInput = doc.getElementById('search');
-  searchInput.value = 'jameson';
-  searchInput.dispatchEvent(new dom.window.Event('input'));
-  check('главная: поиск «jameson» → 1 позиция', visibleCards(dom).length === 1, String(visibleCards(dom).length));
-  searchInput.value = 'нет такого напитка';
-  searchInput.dispatchEvent(new dom.window.Event('input'));
-  check('главная: пустой результат показывает подсказку', !doc.getElementById('empty').hidden);
-  searchInput.value = '';
-  searchInput.dispatchEvent(new dom.window.Event('input'));
-  doc.querySelector('#filters button[data-category="vodka"]').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-  check('главная: фильтр «Водка» → 4 позиции', visibleCards(dom).length === 4, String(visibleCards(dom).length));
-  check('главная: перенумерация видимых карточек', visibleCards(dom)[0].querySelector('.product-number').textContent === '01');
-  doc.querySelector('#filters button[data-category="all"]').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-  check('главная: «Все напитки» → снова 30', visibleCards(dom).length === 30);
+  check('Googlebot: страница отдаётся полностью', doc(dom).querySelectorAll('.product').length >= 20);
   dom.window.close();
 
-  // ------------------------------------------------------------ поиск на страницах каталога
-  dom = await load('/catalog/', { ua: GOOGLEBOT });
-  doc = dom.window.document;
-  const catalogSearch = doc.getElementById('expanded-search');
-  catalogSearch.value = 'виски';
-  catalogSearch.dispatchEvent(new dom.window.Event('input'));
-  const visibleSections = [...doc.querySelectorAll('.catalog-section')].filter((section) => !section.hidden && section.querySelector('.expanded-product'));
-  check('каталог: поиск «виски» оставляет один раздел', visibleSections.length === 1, String(visibleSections.length));
-  catalogSearch.value = 'нет такого';
-  catalogSearch.dispatchEvent(new dom.window.Event('input'));
-  check('каталог: пустой результат показывает подсказку', !doc.querySelector('.search-empty').hidden);
+  dom = await load('/', { ua: YANDEXBOT });
+  check('YandexBot: страница отдаётся полностью', doc(dom).querySelectorAll('.product').length >= 20);
   dom.window.close();
 
-  dom = await load('/catalog/whisky/', { ua: GOOGLEBOT });
-  doc = dom.window.document;
-  const categorySearch = doc.getElementById('expanded-search');
-  categorySearch.value = 'jack';
-  categorySearch.dispatchEvent(new dom.window.Event('input'));
-  const leftCards = [...doc.querySelectorAll('.expanded-product')].filter((card) => !card.hidden);
-  const otherSections = [...doc.querySelectorAll('.catalog-section')].filter((section) => !section.querySelector('.expanded-product'));
-  check('раздел: поиск «jack» → 1 позиция', leftCards.length === 1, String(leftCards.length));
-  check('раздел: блок «Другие разделы» не скрывается поиском', otherSections.length > 0 && otherSections.every((section) => !section.hidden));
+  // ------------------------------------------------ корзина
+  dom = await load('/');
+  check('корзина: счётчик начинается с нуля', counter(dom).textContent.trim() === '0');
+  const addButton = doc(dom).querySelector('.shelf-track .add-basket');
+  const productName = addButton.dataset.label.replace(' — в корзине', '');
+  click(addButton);
+  check('корзина: после нажатия счётчик равен 1', counter(dom).textContent.trim() === '1');
+  check('корзина: позиция записана в localStorage', Object.values(store(dom)).reduce((a, b) => a + b, 0) === 1);
+  check('корзина: кнопка подтвердила добавление', addButton.textContent.includes('Добавлено'));
+
+  const opener = doc(dom).querySelector('.site-header .basket-open');
+  click(opener);
+  check('корзина: панель открывается', doc(dom).querySelector('.cart-drawer').hasAttribute('open'));
+  check('корзина: в списке есть добавленный товар', (doc(dom).querySelector('.basket-row .basket-name') || {}).textContent === productName);
+  check('корзина: в строке виден объём', Boolean(doc(dom).querySelector('.basket-row .basket-sub')));
+
+  click(doc(dom).querySelector('.basket-row .quantity button:last-child'));
+  check('корзина: «+» увеличивает количество', counter(dom).textContent.trim() === '2');
+  click(doc(dom).querySelector('.basket-row .quantity button'));
+  check('корзина: «−» уменьшает количество', counter(dom).textContent.trim() === '1');
+
+  const checkout = doc(dom).querySelector('.basket-checkout');
+  check('корзина: оформление ведёт на звонок', (checkout.getAttribute('href') || '').startsWith('tel:'));
+  check('корзина: на странице нет формы заказа', doc(dom).querySelectorAll('form').length === 0);
+  check('корзина: подписано, что заказ не отправляется', doc(dom).querySelector('.basket-note').textContent.includes('не отправляется'));
   dom.window.close();
 
-  // ------------------------------------------------------------ переходы внутри /test/
-  dom = await load('/test/', { ua: DESKTOP });
-  doc = dom.window.document;
-  check('/test/ открыт с десктопа', !blocked(dom));
-  check('/test/ помечен как тестовый просмотр', !!doc.querySelector('.test-bar'));
-  check('/test/ закрыт от индексации', doc.querySelector('meta[name=robots]').content.includes('noindex'));
-  check('/test/: 30 карточек в HTML', doc.querySelectorAll('#products article.product').length === 30);
-  const navCatalog = doc.querySelector('.navigation a[href$="catalog/"]');
-  check('/test/: ссылка «Каталог» ведёт внутрь /test/', urlOf(dom, navCatalog.getAttribute('href')).startsWith('/test/catalog/'), urlOf(dom, navCatalog.getAttribute('href')));
+  dom = await load('/', { local: { 'selection-alkonoch-v1': '{"0":3}' } });
+  check('корзина: сохраняется между загрузками', counter(dom).textContent.trim() === '3');
   dom.window.close();
 
-  dom = await load('/test/catalog/', { ua: DESKTOP });
-  check('/test/catalog/ открыт', !blocked(dom) && dom.window.document.querySelector('h1').textContent.includes('Каталог'));
-  check('/test/catalog/: 30 карточек', dom.window.document.querySelectorAll('article.expanded-product').length === 30);
-  const catLink = dom.window.document.querySelector('.category-grid a.category-link[href*="whisky"]');
-  const catUrl = urlOf(dom, catLink.getAttribute('href'));
-  check('/test/catalog/: ссылка на раздел ведёт внутрь /test/', catUrl === '/test/catalog/whisky/', catUrl);
+  // ------------------------------------------------ страница товара
+  dom = await load('/catalog/product/jameson/');
+  check('товар: H1 с названием', (doc(dom).querySelector('h1') || {}).textContent === 'Jameson');
+  check('товар: цена заменена на уточнение', doc(dom).querySelector('.detail-price .price-value').textContent === 'Цену уточняйте');
+  check('товар: кнопка «В корзину» на месте', !!doc(dom).querySelector('.add-basket'));
+  check('товар: блок «С этим товаром также покупают»',
+    (doc(dom).querySelector('#also-title') || {}).textContent === 'С этим товаром также покупают');
+  check('товар: в блоке пять карточек', doc(dom).querySelectorAll('#also article.product').length === 5);
+  check('товар: есть ссылка на звонок', !!doc(dom).querySelector('a[href^="tel:"]'));
+  click(doc(dom).querySelector('.add-basket'));
+  check('товар: добавление в корзину работает', counter(dom).textContent.trim() === '1');
   dom.window.close();
 
-  dom = await load('/test/catalog/whisky/', { ua: DESKTOP });
-  doc = dom.window.document;
-  check('/test/catalog/whisky/ открыт', !blocked(dom) && doc.querySelector('h1').textContent.trim() === 'Виски');
-  check('/test/catalog/whisky/: 5 позиций', doc.querySelectorAll('article.expanded-product').length === 5);
-  const productHref = urlOf(dom, doc.querySelector('a.expanded-product-title').getAttribute('href'));
-  check('/test/catalog/whisky/: ссылка на товар внутри /test/', productHref.startsWith('/test/catalog/product/'), productHref);
+  // ------------------------------------------------ категория
+  dom = await load('/catalog/whisky/');
+  const chips = doc(dom).querySelector('.page-meta .chip strong');
+  check('категория: H1 — название раздела', (doc(dom).querySelector('h1') || {}).textContent === 'Виски');
+  check('категория: счётчик совпадает с числом карточек', Number(chips.textContent) === cards(dom).length);
+  check('категория: есть ссылки на другие разделы', doc(dom).querySelectorAll('.seo-links a').length === 9);
+  check('категория: нет дублирующего заголовка раздела в полке', doc(dom).querySelectorAll('.category-link').length === 0);
   dom.window.close();
 
-  dom = await load('/test/catalog/product/jameson/', { ua: DESKTOP });
-  doc = dom.window.document;
-  check('/test/catalog/product/jameson/ открыт', !blocked(dom) && doc.querySelector('h1').textContent.includes('Jameson'));
-  check('товар в /test/: кнопка звонка', !!doc.querySelector('a[href="tel:+74950959599"]'));
-  check('товар в /test/: ссылка на Telegram', !!doc.querySelector('a[href="https://t.me/alkomsk_shop_bot"]'));
-  const crumbs = [...doc.querySelectorAll('.breadcrumbs a')].map((a) => urlOf(dom, a.getAttribute('href')));
-  check('товар в /test/: хлебные крошки внутри /test/', crumbs.every((url) => url.startsWith('/test/')), crumbs.join(' '));
-  const others = [...doc.querySelectorAll('.homepage-extra-nav a[href*="catalog/product"]')].map((a) => urlOf(dom, a.getAttribute('href')));
-  check('товар в /test/: «Ещё в разделе» внутри /test/', others.length > 0 && others.every((url) => url.startsWith('/test/')), String(others.length));
+  // ------------------------------------------------ поиск
+  dom = await load('/catalog/');
+  const search = doc(dom).querySelector('#catalog-search');
+  search.value = 'jack';
+  search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const visible = [...doc(dom).querySelectorAll('#products article.product')].filter((card) => !card.hidden);
+  check('поиск: «jack» оставляет одну карточку', visible.length === 1, `видно ${visible.length}`);
+  check('поиск: скрытые разделы убраны', [...doc(dom).querySelectorAll('.catalog-section')].every((section) => !section.hidden || section.querySelector('article.product')));
+
+  search.value = 'нет-такого-напитка';
+  search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  check('поиск: пустой результат показывает подсказку', !doc(dom).querySelector('.search-empty').hidden);
+
+  search.value = '';
+  search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  check('поиск: сброс возвращает весь каталог', [...doc(dom).querySelectorAll('#products article.product')].every((card) => !card.hidden));
+
+  const chip = doc(dom).querySelector('#category-chips button[data-category="gin"]');
+  click(chip);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const ginVisible = [...doc(dom).querySelectorAll('#products article.product')].filter((card) => !card.hidden);
+  check('фильтр: «Джин» оставляет товары только этого раздела', ginVisible.length === 2 && ginVisible.every((card) => card.dataset.category === 'gin'));
   dom.window.close();
 
-  for (const [path, heading] of [['/test/delivery/', 'Доставка'], ['/test/delivery/cao/', 'Центральный округ'], ['/test/faq/', 'Вопросы']]) {
-    const page = await load(path, { ua: DESKTOP });
-    const pageDoc = page.window.document;
-    const escapes = [...pageDoc.querySelectorAll('a[href]')]
-      .map((a) => a.getAttribute('href'))
-      .filter((href) => href && !/^(https?:|tel:|mailto:|#)/.test(href) && !href.startsWith('../'))
-      .map((href) => urlOf(page, href))
-      .filter((url) => !url.startsWith('/test/'));
-    check(`${path} открыт и не уводит из /test/`, !blocked(page) && pageDoc.querySelector('h1').textContent.includes(heading) && escapes.length === 0, escapes.slice(0, 3).join(' '));
-    page.window.close();
-  }
-
-  const rawTestCatalog = await (await fetch(BASE + '/test/catalog/')).text();
-  const pageLinks = [...rawTestCatalog.matchAll(/<a[^>]+href="([^"]+)"[^>]*>/g)]
-    .filter(([tag]) => !tag.includes('data-tree="production"'))
-    .map(([, href]) => href)
-    .filter((href) => href.endsWith('/') && !/^(https?:|tel:)/.test(href));
-  const resolved = pageLinks.map((href) => new URL(href, BASE + '/test/catalog/').pathname);
-  check('/test/catalog/: все ссылки на разделы внутри /test/', resolved.every((url) => url.startsWith('/test/')), resolved.filter((url) => !url.startsWith('/test/')).slice(0, 3).join(' '));
-
-  // ------------------------------------------------------------ корзина
-  dom = await load('/catalog/', { ua: MOBILE, referrer: 'https://www.google.com/' });
-  doc = dom.window.document;
-  doc.querySelector('.add-basket[data-product="0"]').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-  const stored = JSON.parse(dom.window.localStorage.getItem('selection-alkonoch-v1') || '{}');
-  check('корзина: позиция записана в localStorage', stored['0'] === 1, JSON.stringify(stored));
-  check('корзина: счётчик в шапке', doc.querySelector('.basket-count').textContent === '1');
-  doc.querySelector('.basket-open').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-  check('корзина: диалог открывается', doc.querySelector('.basket-dialog').hasAttribute('open') || doc.querySelector('.basket-dialog').open === true);
-  check('корзина: оформление — ссылка на звонок', doc.querySelector('.basket-checkout').getAttribute('href') === 'tel:+74950959599');
-  check('корзина: нет формы отправки заказа', doc.querySelectorAll('.basket-dialog form').length === 0);
-  const savedBasket = dom.window.localStorage.getItem('selection-alkonoch-v1');
+  // ------------------------------------------------ мобильное меню
+  dom = await load('/', { ua: MOBILE });
+  click(doc(dom).querySelector('.burger'));
+  check('меню: бургер раскрывает навигацию', doc(dom).querySelector('.mobile-nav').classList.contains('open'));
   dom.window.close();
 
-  dom = await load('/catalog/product/jameson/', {
-    ua: MOBILE, referrer: BASE + '/catalog/', session: { 'alkonoch-search-entry': '1' },
-    local: { 'selection-alkonoch-v1': savedBasket },
+  // ------------------------------------------------ тестовое дерево
+  dom = await load('/test/');
+  check('/test/: страница открыта', doc(dom).querySelectorAll('.product').length >= 20);
+  check('/test/: noindex', (doc(dom).querySelector('meta[name="robots"]').getAttribute('content') || '').includes('noindex'));
+  check('/test/: нет canonical', !doc(dom).querySelector('link[rel="canonical"]'));
+  const testLinks = [...doc(dom).querySelectorAll('a[href]')]
+    .map((a) => a.getAttribute('href'))
+    .filter((href) => /^\.\.\//.test(href) === false && !/^(https?:|tel:|mailto:|#)/.test(href));
+  const outside = [...doc(dom).querySelectorAll('a[href]')].filter((a) => {
+    const href = a.getAttribute('href');
+    if (/^(https?:|tel:|mailto:|#)/.test(href)) return false;
+    if (href.startsWith('../../')) return false; // общие файлы: assets/, img/, logo.svg
+    return !href.startsWith('.') && !href.startsWith('catalog') && !href.startsWith('delivery') && !href.startsWith('faq');
   });
-  check('корзина: сохраняется между страницами', dom.window.document.querySelector('.basket-count').textContent === '1');
-  const productLd = [...dom.window.document.querySelectorAll('script[type="application/ld+json"]')]
-    .map((node) => JSON.parse(node.textContent)).find((data) => data['@type'] === 'Product');
-  check('товар: JSON-LD без цены', productLd && !JSON.stringify(productLd.offers).includes('price'));
-  check('товар: абсолютная картинка в JSON-LD', productLd.image[0].startsWith('https://24alkomoscow.site/img/'));
+  check('/test/: ссылки не уводят из теста', outside.length === 0, `подозрительных ${outside.length}`);
+  check('/test/: есть предупреждающая полоса', !!doc(dom).querySelector('.test-bar'));
+  const testAdd = doc(dom).querySelector('.add-basket');
+  click(testAdd);
+  check('/test/: отдельная корзина', store(dom, 'selection-alkonoch-test-v1')[testAdd.dataset.product] === 1);
   dom.window.close();
 
-  dom = await load('/test/catalog/', { ua: DESKTOP, local: { 'selection-alkonoch-v1': savedBasket } });
-  check('корзина теста отдельная от рабочей', dom.window.document.querySelector('.basket-count').textContent === '0');
+  dom = await load('/test/catalog/whisky/');
+  check('/test/: страница категории открыта', cards(dom).length === 5);
+  check('/test/: категория noindex', (doc(dom).querySelector('meta[name="robots"]').getAttribute('content') || '').includes('noindex'));
   dom.window.close();
 
-  const failed = results.filter((result) => !result.ok);
-  console.log(`\nВсего проверок: ${results.length}, провалено: ${failed.length}`);
-  process.exit(failed.length ? 1 : 0);
+  // ------------------------------------------------ итог
+  const failed = results.filter((item) => !item.ok);
+  console.log(`\nИтого: ${results.length} проверок, ${failed.length} провалов`);
+  if (failed.length) {
+    for (const item of failed) console.log('  FAIL:', item.name);
+    process.exit(1);
+  }
 })().catch((error) => {
-  console.error(error);
+  console.error('Тест упал:', error);
   process.exit(1);
 });

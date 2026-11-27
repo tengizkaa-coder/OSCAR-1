@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Локальный сервер для просмотра сайта.
 
-Отличие от `python3 -m http.server`: запрос «/» перенаправляется на «/test/»,
-потому что рабочие страницы по задумке закрыты белым экраном для компьютеров.
-Сам сайт при этом не меняется — это только удобство локального просмотра.
+Отдаёт собранный сайт как есть: «/» — рабочая главная, «/test/» — тестовое дерево.
+Слушает 0.0.0.0, чтобы страница открывалась и по внешнему адресу песочницы.
 
 Запуск: python3 tools/preview-server.py [порт]   (по умолчанию 8000)
 """
@@ -18,13 +17,10 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
-    def do_GET(self):
-        if self.path.split("?")[0] == "/":
-            self.send_response(302)
-            self.send_header("Location", "/test/")
-            self.end_headers()
-            return
-        super().do_GET()
+    def end_headers(self):
+        # Локальный просмотр не должен кэшировать сборку.
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -33,7 +29,7 @@ class Handler(SimpleHTTPRequestHandler):
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    print(f"Просмотр: http://0.0.0.0:{port}/test/  (корень «/» ведёт на /test/)")
+    print(f"Просмотр: http://0.0.0.0:{port}/   (тестовое дерево — /test/)", flush=True)
     server.serve_forever()
 
 
